@@ -1,0 +1,7 @@
+
+# naver crawler
+
+yaml
+beautifulsoup4
+urllib
+json
