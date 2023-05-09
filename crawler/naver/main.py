@@ -2,7 +2,7 @@ from bs4 import BeautifulSoup
 import re
 import yaml
 from urllib import parse
-from naver import get_tags, scrape_blog
+from crawler.naver.naver import get_tags, scrape_blog
 
 def get_blog_content(posturl):
     blogid, postno = posturl.split("/")[-2:]

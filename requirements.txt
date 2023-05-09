@@ -1,7 +1,7 @@
 
 # naver crawler
 
-yaml
+PyYAML
 beautifulsoup4
 urllib
 json
