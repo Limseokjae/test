@@ -1,4 +1,6 @@
 import os
+import sys
+import json
 import argparse
 import pandas as pd
 from tqdm import tqdm
@@ -16,7 +18,7 @@ def main():
     parser.add_argument('-meta', '--save_meta', action='store_true')
     args = parser.parse_args()
 
-    data = pd.read_excel('data_urls_1000.xlsx')
+    data = pd.read_csv('urls.csv')
     done = set()
     error = set()
 
@@ -36,30 +38,35 @@ def main():
 
     for i in pbar:
         url = data.iloc[i].url
-        if url not in done:  # 진행하지 않은 url만 download 시도
-            try:
-                yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
+        try:
+            yt = YouTube(url, use_oauth=True, allow_oauth_cache=True)
 
-                if args.save_video:
-                    yt.streams.filter(progressive=False).order_by('resolution').desc().first().download(output_path=save_video_dir)
-                    done.add(url)  # 진행한 url 체크 
+            if args.save_video:
+                video = yt.streams.filter(progressive=False).order_by('resolution').desc().first()
+                video.download(output_path=save_video_dir, filename=f'{yt.video_id}.{video.subtype}')
 
-                if args.save_meta:
-                    yt.metadata
+            if args.save_meta:
+                yt.metadata  # Meta 정보 업데이트
 
-                    content = yt.initial_data['contents']['twoColumnWatchNextResults']['results']['results']['contents'][1]['videoSecondaryInfoRenderer']['attributedDescription']['content']
-                    with open(os.path.join(save_meta_dir, f'{yt.title}.txt'), 'w') as f:
-                        f.write(content)
+                content = yt.initial_data['contents']['twoColumnWatchNextResults']['results']['results']['contents'][1]['videoSecondaryInfoRenderer']['attributedDescription']['content']
+                with open(os.path.join(save_meta_dir, f'{yt.video_id}.txt'), 'w') as f:
+                    f.write(content)
 
-                    transcript = YouTubeTranscriptApi.get_transcript(yt.video_id, languages=['ko'])
-                    caption = formatter.format_transcript(transcript)
-                    with open(os.path.join(save_caption_dir, f'{yt.title}.txt'), 'w') as f:
-                        f.write(caption)
-                    done.add(url)  # 진행한 url 체크 
-            except:
-                error.add(url)
-                pbar.set_description(f'')
-                # print(url)
+                transcript = YouTubeTranscriptApi.get_transcript(yt.video_id, languages=['ko'])
+                with open(os.path.join(save_caption_dir, f'{yt.video_id}.json'), 'w') as f:
+                    json.dump(transcript, f)
+
+                # caption = formatter.format_transcript(transcript)
+                # with open(os.path.join(save_caption_dir, f'{yt.title}.txt'), 'w') as f:
+                #     f.write(caption)
+
+            done.add(url)  # 진행한 url 체크 
+        except KeyboardInterrupt:
+            sys.exit(0)
+        except Exception as e:
+            error.add(url)
+            print(e)
+            print(url)
 
         pbar.set_description(f'Done: {len(done)} | Error: {len(error)}')
 
