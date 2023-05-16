@@ -5,3 +5,9 @@ PyYAML
 beautifulsoup4
 urllib
 json
+
+# youtube crawler
+tqdm
+pandas
+pytube >= 15.0.0
+youtube-transcript-api >= 0.6.0
