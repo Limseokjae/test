@@ -56,14 +56,14 @@ def main():
                 try: 
                     transcript = YouTubeTranscriptApi.get_transcript(yt.video_id, languages=['ko'])
                     with open(os.path.join(save_caption_dir, f'{yt.video_id}.json'), 'w') as f:
-                        json.dump(transcript, f)
+                        json.dump(transcript, f, indent=2, ensure_ascii=False)
                 except youtube_transcript_api.TranscriptsDisabled as e:  # case: 자막 사용 불가
                     error.add((url, 'caption'))
                 except youtube_transcript_api.NoTranscriptFound as e:  # case: 자동 번역
                     transcript_list = YouTubeTranscriptApi.list_transcripts(yt.video_id)
                     transcript = next(iter(transcript_list)).translate('ko').fetch()
                     with open(os.path.join(save_caption_dir, f'{yt.video_id}.json'), 'w') as f:
-                        json.dump(transcript, f)
+                        json.dump(transcript, f, indent=2, ensure_ascii=False)
 
                 # caption = formatter.format_transcript(transcript)
                 # with open(os.path.join(save_caption_dir, f'{yt.title}.txt'), 'w') as f:
