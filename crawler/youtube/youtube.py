@@ -8,6 +8,7 @@ from tqdm import tqdm
 from pytube import YouTube
 from pytube import extract
 
+import youtube_transcript_api
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
 
@@ -52,9 +53,17 @@ def main():
                 with open(os.path.join(save_meta_dir, f'{yt.video_id}.txt'), 'w') as f:
                     f.write(content)
 
-                transcript = YouTubeTranscriptApi.get_transcript(yt.video_id, languages=['ko'])
-                with open(os.path.join(save_caption_dir, f'{yt.video_id}.json'), 'w') as f:
-                    json.dump(transcript, f)
+                try: 
+                    transcript = YouTubeTranscriptApi.get_transcript(yt.video_id, languages=['ko'])
+                    with open(os.path.join(save_caption_dir, f'{yt.video_id}.json'), 'w') as f:
+                        json.dump(transcript, f)
+                except youtube_transcript_api.TranscriptsDisabled as e:  # case: 자막 사용 불가
+                    error.add((url, 'caption'))
+                except youtube_transcript_api.NoTranscriptFound as e:  # case: 자동 번역
+                    transcript_list = YouTubeTranscriptApi.list_transcripts(yt.video_id)
+                    transcript = next(iter(transcript_list)).translate('ko').fetch()
+                    with open(os.path.join(save_caption_dir, f'{yt.video_id}.json'), 'w') as f:
+                        json.dump(transcript, f)
 
                 # caption = formatter.format_transcript(transcript)
                 # with open(os.path.join(save_caption_dir, f'{yt.title}.txt'), 'w') as f:
@@ -64,9 +73,7 @@ def main():
         except KeyboardInterrupt:
             sys.exit(0)
         except Exception as e:
-            error.add(url)
-            print(e)
-            print(url)
+            error.add((url, 'error'))
 
         pbar.set_description(f'Done: {len(done)} | Error: {len(error)}')
 
