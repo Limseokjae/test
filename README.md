@@ -7,15 +7,15 @@
 
 ```
 butteryam
-|-- README.md
-|-- crawler
-|   |-- naver
-|   |   |-- main.py
-|   |   `-- naver.py
-|   `-- youtube
-|   |   `-- youtube.py
-|-- model
-`-- requirements.txt
+├── README.md
+├── crawler
+│   ├── naver
+│   │   ├── main.py
+│   │   └── naver.py
+│   └── youtube
+│       └──  youtube.py
+├── model
+└── requirements.txt
 
 ```
 
