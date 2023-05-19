@@ -1,9 +1,13 @@
 import os
+import re
 import sys
 import json
 import argparse
+import requests
+
 import pandas as pd
 from tqdm import tqdm
+from bs4 import BeautifulSoup
 
 from pytube import YouTube
 from pytube import extract
@@ -11,6 +15,14 @@ from pytube import extract
 import youtube_transcript_api
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import TextFormatter
+
+
+def crawl_meta(video_id):
+
+    soup = BeautifulSoup(requests.get(f'https://www.youtube.com/watch?v={video_id}').content)
+    pattern = re.compile('(?<=shortDescription":").*(?=","isCrawlable)')
+    description = pattern.findall(str(soup))[0].replace('\\n','\n')
+    return description
 
 
 def main():
@@ -54,7 +66,8 @@ def main():
             if args.meta:
                 yt.metadata  # Meta 정보 업데이트
 
-                content = yt.initial_data['contents']['twoColumnWatchNextResults']['results']['results']['contents'][1]['videoSecondaryInfoRenderer']['attributedDescription']['content']
+                # content = yt.initial_data['contents']['twoColumnWatchNextResults']['results']['results']['contents'][1]['videoSecondaryInfoRenderer']['attributedDescription']['content']
+                content = crawl_meta(yt.video_id)
                 with open(os.path.join(save_meta_dir, f'{yt.video_id}.txt'), 'w') as f:
                     f.write(content)
 
