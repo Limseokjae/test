@@ -20,7 +20,16 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+from torchvision.ops import box_convert
+import supervision as sv
+from functools import partial
 
+# classifier
+import yaml
+import timm
+import pickle
+from timm.models.helpers import load_checkpoint
+from timm.data import create_dataset, create_loader, resolve_data_config
 
 def load_image(image_path):
     # load image
@@ -36,6 +45,10 @@ def load_image(image_path):
     image, _ = transform(image_pil, None)  # 3, h, w
     return image_pil, image
 
+class ARGS(object):
+    def __init__(self, args):          
+        for key in args:
+            setattr(self, key, args[key])
 
 def load_model(model_config_path, model_checkpoint_path, device):
     args = SLConfig.fromfile(model_config_path)
@@ -130,16 +143,27 @@ def save_mask_data(output_dir, mask_list, box_list, label_list, img_name):
 class SAMVIT:
     def __init__(self):
         self.config = "./model/config.py"
+        vit_args_path = "./model/vit_args.yaml"
         self.grounded_checkpoint = "./model/groundingdino_swint_ogc.pth"
         self.sam_checkpoint = "./model/sam_vit_h_4b8939.pth"
         self.text_prompt = 'foods, tools, cutlery, plate, bowl, frypan, pot, cooking pot'
         self.output_dir = './output'
         self.box_threshold = 0.3
         self.text_threshold = 0.25
-        self.device = 'cuda'
+        self.device = torch.device("cuda")
+        
+        with open(vit_args_path, 'r') as f:
+            vit_args = yaml.safe_load(f)
+
+        self.vit_args = ARGS(vit_args)
 
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
+
+        with open(self.vit_args.class_map, 'rb') as f:
+            labels = pickle.load(f)
+
+        self.labels_dic = {v:k for k, v, in labels.items()}
 
     def load_model(self):
         self.model = load_model(
@@ -147,11 +171,21 @@ class SAMVIT:
             self.grounded_checkpoint,
             self.device
         )
-        self.predictor = SamPredictor(build_sam(
-            checkpoint=self.sam_checkpoint
-        ).to(self.device))
+        # self.predictor = SamPredictor(build_sam(
+        #     checkpoint=self.sam_checkpoint
+        # ).to(self.device))
+
+        self.classifier = timm.models.create_model(
+            self.vit_args.model,
+            pretrained=False,
+            num_classes = 56
+            )
+        
+        self.classifier = self.classifier.to(device)
+        load_checkpoint(self.classifier, self.vit_args.checkpoint)
     
     def run_model(self, img_path):
+        img_dir = Path(img_path).parent
         img_name = Path(img_path).stem
         image_pil, image = load_image(img_path)
         boxes_filt, pred_phrases = get_grounding_output(
@@ -163,40 +197,99 @@ class SAMVIT:
             self.device
         )
 
-        image = cv2.imread(img_path)
-        cv2.imwrite(os.path.join(self.output_dir, Path(img_path).name), image)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        self.predictor.set_image(image)
+        detected_img_dir = os.path.join(img_dir, Path(img_path).stem)
+        Path(detected_img_dir).mkdir(parents=True, exist_ok=True)
 
-        size = image_pil.size
-        H, W = size[1], size[0]
-        for i in range(boxes_filt.size(0)):
-            boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
-            boxes_filt[i][:2] -= boxes_filt[i][2:] / 2
-            boxes_filt[i][2:] += boxes_filt[i][:2]
+        h, w, _ = image_pil.shape
+        boxes = boxes * torch.Tensor([w, h, w, h])
+        xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+        detections = sv.Detections(xyxy=xyxy)
 
-        boxes_filt = boxes_filt.cpu()
-        transformed_boxes = self.predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(self.device)
+        for img_idx, (x1, y1, x2, y2) in enumerate(xyxy):
+            cv2.imwrite(os.path.join(detected_img_dir, f"{img_idx:05d}.png"), image_pil[int(y1):int(y2), int(x1):int(x2), ::-1])
 
-        masks, _, _ = self.predictor.predict_torch(
-            point_coords = None,
-            point_labels = None,
-            boxes = transformed_boxes.to(self.device),
-            multimask_output = False,
+
+        dataset = create_dataset(
+            root=detected_img_dir,
+            name='',
+            search_split=False,
+        )
+        data_config = resolve_data_config(
+            vars(self.vit_args),
+            model=self.classifier,
+            use_test_size=True,
+            verbose=True,
         )
 
-        # draw output image
-        plt.figure(figsize=(10, 10))
-        #plt.imshow(image)
-        for mask in masks:
-            show_mask(mask.cpu().numpy(), plt.gca(), random_color=True)
-        for box, label in zip(boxes_filt, pred_phrases):
-            show_box(box.numpy(), plt.gca(), label)
-
-        plt.axis('off')
-        plt.savefig(
-            os.path.join(self.output_dir, f"{img_name}_grounded_sam_output.jpg"), 
-            bbox_inches="tight", dpi=300, pad_inches=0.0
+        loader = create_loader(
+            dataset,
+            input_size=data_config['input_size'],
+            batch_size=10,
+            use_prefetcher=False,
+            interpolation=data_config['interpolation'],
+            mean=data_config['mean'],
+            std=data_config['std'],
+            num_workers=self.vit_args.workers,
+            crop_pct=data_config['crop_pct'],
+            crop_mode=data_config['crop_mode'],
+            pin_memory=self.vit_args.pin_mem,
+            device=self.device,
+            tf_preprocessing=False,
         )
 
-        save_mask_data(self.output_dir, masks, boxes_filt, pred_phrases, img_name)
+
+        amp_dtype = torch.bfloat16 if self.vit_args.amp_dtype == 'bfloat16' else torch.float16
+        amp_autocast = partial(torch.autocast, device_type=self.qdevice.type, dtype=amp_dtype)
+
+        self.classifier.eval()
+        with torch.no_grad():
+            for batch_idx, (input, target) in enumerate(loader):
+                # compute output
+                with amp_autocast():
+                    input = input.to(self.device)            
+                    output = self.classifier(input)
+
+                _, pred_batch = output.topk(1, 1, True, True)
+                
+                for idx in pred_batch.cpu().numpy():
+                    print(self.labels_dic[int(idx)])
+
+        # image = cv2.imread(img_path)
+        # cv2.imwrite(os.path.join(self.output_dir, Path(img_path).name), image)
+        # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+        # self.predictor.set_image(image)
+
+        # size = image_pil.size
+        # H, W = size[1], size[0]
+        # for i in range(boxes_filt.size(0)):
+        #     boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
+        #     boxes_filt[i][:2] -= boxes_filt[i][2:] / 2
+        #     boxes_filt[i][2:] += boxes_filt[i][:2]
+
+        # boxes_filt = boxes_filt.cpu()
+        # transformed_boxes = self.predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(self.device)
+
+        # masks, _, _ = self.predictor.predict_torch(
+        #     point_coords = None,
+        #     point_labels = None,
+        #     boxes = transformed_boxes.to(self.device),
+        #     multimask_output = False,
+        # )
+
+        # # draw output image
+        # plt.figure(figsize=(10, 10))
+        # #plt.imshow(image)
+        # for mask in masks:
+        #     show_mask(mask.cpu().numpy(), plt.gca(), random_color=True)
+        # for box, label in zip(boxes_filt, pred_phrases):
+        #     show_box(box.numpy(), plt.gca(), label)
+
+        # plt.axis('off')
+        # plt.savefig(
+        #     os.path.join(self.output_dir, f"{img_name}_grounded_sam_output.jpg"), 
+        #     bbox_inches="tight", dpi=300, pad_inches=0.0
+        # )
+
+        # save_mask_data(self.output_dir, masks, boxes_filt, pred_phrases, img_name)
