@@ -2,10 +2,13 @@ import os
 import urllib
 import tempfile
 from crawler.naver.main import get_blog_content
+from model.sam_vit import SAMVIT
 
-posturl = "https://blog.naver.com/yee1036/223090678033"
+posturl = "https://blog.naver.com/peace8012/223098210044"
 postdata, postno = get_blog_content(posturl)
 idx = 0
+SamVitModel = SAMVIT()
+SamVitModel.load_model()
 
 with tempfile.TemporaryDirectory() as tmp_dir:
     
@@ -28,6 +31,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
             print(content_type, save_path)
 
             # 이미지 읽어서 모델돌리고 등등 처리
+            SamVitModel.run_model(save_path)
             # image = cv2.imread(save_path)
         else:
             pass
