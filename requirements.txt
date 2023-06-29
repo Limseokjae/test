@@ -31,3 +31,6 @@ safetensors
 # classifier
 
 timm
+
+# gpt
+openai
