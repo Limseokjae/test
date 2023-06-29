@@ -2,6 +2,9 @@
 *.pkl
 *.pth 
 output/
+*.ipynb
+*.csv
+*.ttf
 *.txt
 
 # Byte-compiled / optimized / DLL files
@@ -13,7 +16,10 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+manrecipe/
 dataset/
+tmp*/
+preprocess/
 .Python
 build/
 develop-eggs/

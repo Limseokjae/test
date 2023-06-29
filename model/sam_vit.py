@@ -13,6 +13,7 @@ from groundingdino.models import build_model
 from groundingdino.util import box_ops
 from groundingdino.util.slconfig import SLConfig
 from groundingdino.util.utils import clean_state_dict, get_phrases_from_posmap
+from groundingdino.util.inference import predict
 
 # segment anything
 from segment_anything import build_sam, SamPredictor 
@@ -23,7 +24,7 @@ from pathlib import Path
 from torchvision.ops import box_convert
 import supervision as sv
 from functools import partial
-
+import shutil
 # classifier
 import yaml
 import timm
@@ -32,9 +33,6 @@ from timm.models.helpers import load_checkpoint
 from timm.data import create_dataset, create_loader, resolve_data_config
 
 def load_image(image_path):
-    # load image
-    image_pil = Image.open(image_path).convert("RGB")  # load image
-
     transform = T.Compose(
         [
             T.RandomResize([800], max_size=1333),
@@ -42,16 +40,17 @@ def load_image(image_path):
             T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]
     )
-    image, _ = transform(image_pil, None)  # 3, h, w
-    return image_pil, image
+    image_source = Image.open(image_path).convert("RGB")
+    image = np.asarray(image_source)
+    image_transformed, _ = transform(image_source, None)
+    return image, image_transformed
 
 class ARGS(object):
     def __init__(self, args):          
         for key in args:
             setattr(self, key, args[key])
 
-def load_model(model_config_path, model_checkpoint_path, device):
-    args = SLConfig.fromfile(model_config_path)
+def load_model(args, model_checkpoint_path, device):
     args.device = device
     model = build_model(args)
     checkpoint = torch.load(model_checkpoint_path, map_location="cpu")
@@ -142,20 +141,34 @@ def save_mask_data(output_dir, mask_list, box_list, label_list, img_name):
 
 class SAMVIT:
     def __init__(self):
+        weights_path = "/home/work/Vision1/Butteryam/Weights"
         self.config = "./model/config.py"
-        vit_args_path = "./model/vit_args.yaml"
-        self.grounded_checkpoint = "./model/groundingdino_swint_ogc.pth"
-        self.sam_checkpoint = "./model/sam_vit_h_4b8939.pth"
-        self.text_prompt = 'foods, tools, cutlery, plate, bowl, frypan, pot, cooking pot'
-        self.output_dir = './output'
-        self.box_threshold = 0.3
-        self.text_threshold = 0.25
-        self.device = torch.device("cuda")
-        
+        self.sam_args = SLConfig.fromfile(self.config)
+        self.grounded_checkpoint = self.sam_args.grounded_checkpoint
+        self.sam_checkpoint = self.sam_args.sam_checkpoint
+        self.text_prompt = self.sam_args.text_prompt
+        self.output_dir = self.sam_args.output_dir
+        vit_args_path = self.sam_args.vit_args_path
         with open(vit_args_path, 'r') as f:
             vit_args = yaml.safe_load(f)
 
+         
         self.vit_args = ARGS(vit_args)
+
+        class_map_path = os.path.join(weights_path, "label.pkl")
+        if not os.path.exists(class_map_path):
+            shutil.copy(self.vit_args.class_map, class_map_path)
+        self.vit_args.class_map = class_map_path
+
+        vit_weight_path = os.path.join(weights_path, "model_best.pth.tar")
+        if not os.path.exists(vit_weight_path):
+            src_path = str(Path(vit_args_path).parent / "model_best.pth.tar")
+            shutil.copy(src_path, vit_weight_path)
+        self.vit_args.checkpoint = vit_weight_path
+                
+        self.box_threshold = 0.3
+        self.text_threshold = 0.25
+        self.device = torch.device("cuda")
 
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
@@ -167,7 +180,7 @@ class SAMVIT:
 
     def load_model(self):
         self.model = load_model(
-            self.config,
+            self.sam_args,
             self.grounded_checkpoint,
             self.device
         )
@@ -178,118 +191,67 @@ class SAMVIT:
         self.classifier = timm.models.create_model(
             self.vit_args.model,
             pretrained=False,
-            num_classes = 56
+            num_classes = self.vit_args.num_classes
             )
         
-        self.classifier = self.classifier.to(device)
+        self.classifier = self.classifier.to(self.device)
+
         load_checkpoint(self.classifier, self.vit_args.checkpoint)
+
+        self.transform = timm.data.create_transform(
+            **timm.data.resolve_data_config(self.classifier.pretrained_cfg)
+        )
+
     
     def run_model(self, img_path):
         img_dir = Path(img_path).parent
         img_name = Path(img_path).stem
-        image_pil, image = load_image(img_path)
-        boxes_filt, pred_phrases = get_grounding_output(
-            self.model,
-            image,
-            self.text_prompt,
-            self.box_threshold,
-            self.text_threshold,
-            self.device
+
+        image_source, image = load_image(img_path)
+
+        img = image_source.copy()
+
+        boxes, logits, phrases = predict(
+            model=self.model,
+            image=image,
+            caption=self.text_prompt,
+            box_threshold=self.box_threshold,
+            text_threshold=self.text_threshold
         )
 
         detected_img_dir = os.path.join(img_dir, Path(img_path).stem)
         Path(detected_img_dir).mkdir(parents=True, exist_ok=True)
 
-        h, w, _ = image_pil.shape
+        h, w, _ = image_source.shape
         boxes = boxes * torch.Tensor([w, h, w, h])
         xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
-        detections = sv.Detections(xyxy=xyxy)
+        #detections = sv.Detections(xyxy=xyxy)
 
+
+        cropped_imgs = []
         for img_idx, (x1, y1, x2, y2) in enumerate(xyxy):
-            cv2.imwrite(os.path.join(detected_img_dir, f"{img_idx:05d}.png"), image_pil[int(y1):int(y2), int(x1):int(x2), ::-1])
+            cropped_img = image_source[int(y1):int(y2), int(x1):int(x2)]
+            cropped_imgs.append(self.transform(Image.fromarray(cropped_img)))
 
-
-        dataset = create_dataset(
-            root=detected_img_dir,
-            name='',
-            search_split=False,
-        )
-        data_config = resolve_data_config(
-            vars(self.vit_args),
-            model=self.classifier,
-            use_test_size=True,
-            verbose=True,
-        )
-
-        loader = create_loader(
-            dataset,
-            input_size=data_config['input_size'],
-            batch_size=10,
-            use_prefetcher=False,
-            interpolation=data_config['interpolation'],
-            mean=data_config['mean'],
-            std=data_config['std'],
-            num_workers=self.vit_args.workers,
-            crop_pct=data_config['crop_pct'],
-            crop_mode=data_config['crop_mode'],
-            pin_memory=self.vit_args.pin_mem,
-            device=self.device,
-            tf_preprocessing=False,
-        )
-
+        input = torch.stack(cropped_imgs, dim=0)
 
         amp_dtype = torch.bfloat16 if self.vit_args.amp_dtype == 'bfloat16' else torch.float16
-        amp_autocast = partial(torch.autocast, device_type=self.qdevice.type, dtype=amp_dtype)
+        amp_autocast = partial(torch.autocast, device_type=self.device.type, dtype=amp_dtype)
 
         self.classifier.eval()
         with torch.no_grad():
-            for batch_idx, (input, target) in enumerate(loader):
-                # compute output
-                with amp_autocast():
-                    input = input.to(self.device)            
-                    output = self.classifier(input)
 
-                _, pred_batch = output.topk(1, 1, True, True)
-                
-                for idx in pred_batch.cpu().numpy():
-                    print(self.labels_dic[int(idx)])
+            with amp_autocast():
+                input = input.to(self.device)            
+                output = self.classifier(input)
 
-        # image = cv2.imread(img_path)
-        # cv2.imwrite(os.path.join(self.output_dir, Path(img_path).name), image)
-        # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # top5
+            cls_logits, cls_idxs = torch.nn.functional.softmax(output).topk(5, 1)
 
 
-        # self.predictor.set_image(image)
+        cls_logits = cls_logits.cpu().numpy()
+        cls_idxs = cls_idxs.cpu().numpy()
 
-        # size = image_pil.size
-        # H, W = size[1], size[0]
-        # for i in range(boxes_filt.size(0)):
-        #     boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
-        #     boxes_filt[i][:2] -= boxes_filt[i][2:] / 2
-        #     boxes_filt[i][2:] += boxes_filt[i][:2]
-
-        # boxes_filt = boxes_filt.cpu()
-        # transformed_boxes = self.predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(self.device)
-
-        # masks, _, _ = self.predictor.predict_torch(
-        #     point_coords = None,
-        #     point_labels = None,
-        #     boxes = transformed_boxes.to(self.device),
-        #     multimask_output = False,
-        # )
-
-        # # draw output image
-        # plt.figure(figsize=(10, 10))
-        # #plt.imshow(image)
-        # for mask in masks:
-        #     show_mask(mask.cpu().numpy(), plt.gca(), random_color=True)
-        # for box, label in zip(boxes_filt, pred_phrases):
-        #     show_box(box.numpy(), plt.gca(), label)
-
-        # plt.axis('off')
-        # plt.savefig(
-        #     os.path.join(self.output_dir, f"{img_name}_grounded_sam_output.jpg"), 
-        #     bbox_inches="tight", dpi=300, pad_inches=0.0
-        # )
-
-        # save_mask_data(self.output_dir, masks, boxes_filt, pred_phrases, img_name)
+        for xyxy_, logits, box_, cls_idx in zip(xyxy, cls_logits, boxes, cls_idxs):  
+            cls_phrase = self.labels_dic[int(cls_idx[0])]
+            print(img_path, xyxy_, cls_phrase)
