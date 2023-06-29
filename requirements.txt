@@ -11,3 +11,23 @@ tqdm
 pandas
 pytube >= 15.0.0
 youtube-transcript-api >= 0.6.0
+
+# grounding sam
+torch
+torchvision
+addict
+yapf
+numpy
+opencv-python
+supervision
+pycocotools
+GroundingDINO
+diffusers
+transformers
+accelerate
+scipy
+safetensors
+
+# classifier
+
+timm
