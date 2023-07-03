@@ -3,17 +3,15 @@ import urllib
 import tempfile
 from crawler.naver.main import get_blog_content
 from model.sam_vit import SAMVIT
-
 from text.text_processor import get_info
+import cmd_args
 
-### main code 추후 정리예정 .....
-
-posturl = "https://blog.naver.com/peace8012/223098210044"
-postdata, postno = get_blog_content(posturl)
-idx = 0
-SamVitModel = SAMVIT()
-SamVitModel.load_model()
-with tempfile.TemporaryDirectory() as tmp_dir:
+def main(tmp_dir):
+    posturl = "https://blog.naver.com/peace8012/223098210044"
+    postdata, postno = get_blog_content(posturl)
+    idx = 0
+    SamVitModel = SAMVIT()
+    SamVitModel.load_model()
     txt = []
     print("blog_url", postdata['blog_url'])
     print("post_contents")
@@ -35,8 +33,8 @@ with tempfile.TemporaryDirectory() as tmp_dir:
             # print(content_type, save_path)
 
             # 이미지 읽어서 모델돌리고 등등 처리
-            # SamVitModel.run_model(save_path)
-            # image = cv2.imread(save_path)
+            SamVitModel.run_model(save_path)
+            # image = cv2.imread(save_path)x1
         else:
             pass
 
@@ -51,4 +49,16 @@ with tempfile.TemporaryDirectory() as tmp_dir:
                 "top2":[],"top2_prob":[],"top3":[],"top3_prob":[],
                 "top4":[],"top4_prob":[],"top5":[],"top5_prob":[]
                 }
+
+if __name__ == "__main__":
+
+    args, _ = cmd_args.parser.parse_known_args()
+    print(args)     
+    
+    if args.keep_files:
+        tmp_dir = tempfile.mkdtemp(dir=os.getcwd())
+        main(tmp_dir)
+    else:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            main(tmp_dir)
 
