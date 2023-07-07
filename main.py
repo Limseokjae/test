@@ -2,7 +2,6 @@ import os
 import urllib
 import tempfile
 from crawler.naver.main import get_blog_content
-from model.sam_vit import SAMVIT
 from text.text_processor import get_info
 import cmd_args
 
@@ -10,8 +9,6 @@ def main(tmp_dir):
     posturl = "https://blog.naver.com/peace8012/223098210044"
     postdata, postno = get_blog_content(posturl)
     idx = 0
-    SamVitModel = SAMVIT()
-    SamVitModel.load_model()
     txt = []
     print("blog_url", postdata['blog_url'])
     print("post_contents")
@@ -32,16 +29,14 @@ def main(tmp_dir):
             urllib.request.urlretrieve(img_url, save_path)
             # print(content_type, save_path)
 
-            # 이미지 읽어서 모델돌리고 등등 처리
-            SamVitModel.run_model(save_path)
-            # image = cv2.imread(save_path)x1
         else:
             pass
 
     ## text data
      
-    openai_keys=open('./api.txt','r').read().splitlines()[0]
+    openai_keys= "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"
     response = get_info(openai_keys,txt)
+    print(response)
 
     ## post processing
 
